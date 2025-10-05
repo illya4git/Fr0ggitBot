@@ -1,11 +1,11 @@
 import 'dotenv/config';
 import { Telegraf, session } from 'telegraf';
 import { User } from "./Models.js";
-import stage from "./Scenes.js";
+import createStage from "./Scenes.js";
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 bot.use(session());
-bot.use(stage.middleware());
+bot.use(createStage(bot).middleware());
 
 bot.start(async (ctx) => {
     const id = (await ctx.getChat()).id;
@@ -16,5 +16,6 @@ bot.start(async (ctx) => {
 });
 
 await bot.launch();
+console.log('Bot started');
 process.once('SIGINT', () => bot.stop('SIGINT'))
 process.once('SIGTERM', () => bot.stop('SIGTERM'))
