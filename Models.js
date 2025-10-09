@@ -53,7 +53,7 @@ Lesson.init({
     },
     timestamp: {
         type: DataTypes.DATE,
-        allowNull: false
+        allowNull: true // Можно оставить null, если нет времени
     },
     isPractice: {
         type: DataTypes.BOOLEAN,
@@ -61,7 +61,9 @@ Lesson.init({
     },
     meetingLink: { type: DataTypes.STRING },
     recordingLink: { type: DataTypes.STRING },
-    homework: { type: DataTypes.STRING }
+    homework: { type: DataTypes.STRING },
+    day: { type: DataTypes.STRING },        // День недели ("Пн", "Вт", ...)
+    weekType: { type: DataTypes.STRING }    // Тип недели ("first", "second")
 }, {sequelize});
 Lesson.belongsTo(Group);
 Lesson.belongsTo(Subject);
