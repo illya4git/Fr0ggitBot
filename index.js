@@ -1,21 +1,40 @@
+import { Telegraf, Scenes, session } from 'telegraf';
+import { User, UserGroups } from './Models.js';
+import createStage from './scenes.js';
 import 'dotenv/config';
-import { Telegraf, session } from 'telegraf';
-import { User } from "./Models.js";
-import createStage from "./Scenes.js";
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
+
 bot.use(session());
-bot.use(createStage(bot).middleware());
 
-bot.start(async (ctx) => {
-    const id = (await ctx.getChat()).id;
-    const user = await User.findByPk(id);
-    !user && await User.create({id: id});
+const stage = createStage(bot);
+bot.use(stage.middleware());
 
-    await ctx.scene.enter('GROUP_SELECTOR');
+bot.use(async (ctx, next) => {
+    if (ctx.from) {
+        const userGroup = await UserGroups.findOne({
+            where: { UserId: ctx.from.id }
+        });
+        if (userGroup) {
+            ctx.session.groupId = userGroup.GroupId;
+        }
+    }
+    return next();
 });
 
-await bot.launch();
-console.log('Bot started');
-process.once('SIGINT', () => bot.stop('SIGINT'))
-process.once('SIGTERM', () => bot.stop('SIGTERM'))
+bot.start(async (ctx) => {
+    if (ctx.session.groupId) {
+        return ctx.scene.enter('SCHEDULE');
+    }
+    return ctx.scene.enter('GROUP_SELECTOR');
+});
+
+bot.command('schedule', (ctx) => {
+    if (!ctx.session.groupId) {
+        return ctx.reply('Сначала вам нужно выбрать группу. Нажмите /start');
+    }
+    return ctx.scene.enter('SCHEDULE');
+});
+
+console.log('Bot is running...');
+bot.launch();
