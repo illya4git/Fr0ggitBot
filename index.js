@@ -9,9 +9,9 @@ bot.use(stage.middleware());
 
 bot.start(async (ctx) => {
     const id = (await ctx.getChat()).id;
-    const user = await User.findByPk(id);
-    !user && await User.create({id: id});
-
+    ctx.session.user
+        = await User.findByPk(id)
+        || await User.create({id: id});
     await ctx.scene.enter('GROUP_SELECTOR');
 });
 
