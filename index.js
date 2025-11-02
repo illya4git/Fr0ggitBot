@@ -23,10 +23,11 @@ bot.use(async (ctx, next) => {
 });
 
 bot.start(async (ctx) => {
-    if (ctx.session.groupId) {
-        return ctx.scene.enter('SCHEDULE');
-    }
-    return ctx.scene.enter('GROUP_SELECTOR');
+    const id = (await ctx.getChat()).id;
+    ctx.session.user
+        = await User.findByPk(id)
+        || await User.create({id: id});
+    await ctx.scene.enter('GROUP_SELECTOR');
 });
 
 bot.command('schedule', (ctx) => {

@@ -1,184 +1,257 @@
 import { Scenes, Markup } from 'telegraf';
-import Calendar from 'telegraf-calendar-telegram';
-import { Group, User, UserGroups, Lesson, Subject, sequelize } from "./Models.js";
-import { Op } from 'sequelize';
+import {User, Group, UserGroup} from "./Models.js";
+import {message} from "telegraf/filters";
 
-async function getLessonsForDate(groupId, date) {
-    const targetDate = new Date(date);
-    
-    const dayNames = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
-    const dayOfWeek = dayNames[targetDate.getDay()];
-    
-    const firstDayOfYear = new Date(targetDate.getFullYear(), 0, 1);
-    const pastDaysOfYear = (targetDate - firstDayOfYear) / 86400000;
-    const weekNumber = Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7);
-    const weekType = (weekNumber % 2 !== 0) ? 'first' : 'second';
+const GroupSelector = new Scenes.WizardScene(
+    'GROUP_SELECTOR',
+    async (ctx) => {
+        const groups = (await User.findByPk(ctx.session.user.id, { include: Group })).Groups;
 
-    const lessons = await Lesson.findAll({
-        where: {
-            GroupId: groupId,
-            day: dayOfWeek,
-            weekType: weekType
-        },
-        include: {
-            model: Subject,
-            required: true
-        },
-        order: [['timestamp', 'ASC']]
-    });
+        await ctx.reply('Оберіть группу:', Markup.inlineKeyboard([
+            ...groups.map(group => [Markup.button.callback(group.name, group.id)]),
+            [Markup.button.callback('➕ Створити нову', 'new')],
+            [Markup.button.callback('➡️ Приєднатися', 'join')]
+        ]));
+        return ctx.wizard.next();
+    },
 
-    return lessons;
-}
+    async (ctx) => {
+        const query = ctx.callbackQuery;
+        if (!query)
+            return;
 
-async function getKeyboardForDate(groupId, date) {
-    const lessons = await getLessonsForDate(groupId, date);
+        try {
+            await ctx.telegram.answerCbQuery(query.id);
+            await ctx.telegram.deleteMessage(ctx.session.user.id, ctx.callbackQuery.message.message_id);
+        } catch (error) { console.error(error); }
 
-    const prev = new Date(date);
-    prev.setDate(prev.getDate() - 1);
-    const prevDate = prev.toISOString().slice(0, 10);
+        switch (ctx.callbackQuery.data) {
+            case 'new':
+                await ctx.reply('Як називається ваша група?');
+                return ctx.wizard.selectStep(2);
 
-    const next = new Date(date);
-    next.setDate(next.getDate() + 1);
-    const nextDate = next.toISOString().slice(0, 10);
+            case 'join':
+                await ctx.reply('Будьте ласкаві, уведіть код вашого запрошення.');
+                return ctx.wizard.selectStep(3);
 
-    const lessonButtons = lessons.map(lesson => {
-        const lessonText = `${lesson.timestamp} - ${lesson.Subject.name}`;
-        return [Markup.button.callback(lessonText, `sub_${lesson.id}`)];
-    });
+            default:
+                ctx.session.group = await Group.findByPk(ctx.callbackQuery.data);
+                ctx.session.isAdmin = (await UserGroup.findOne({
+                    where: {
+                        UserId: ctx.session.user.id,
+                        GroupId: ctx.session.group.id
+                    }
+                })).isAdmin;
 
-    return Markup.inlineKeyboard([
-        ...lessonButtons,
-        [
-            Markup.button.callback('«', `date_${prevDate}`),
-            Markup.button.callback(date, `calendar_${date}`),
-            Markup.button.callback('»', `date_${nextDate}`)
-        ],
-        [Markup.button.callback('Выйти', 'exit')]
-    ]);
-}
+                return ctx.scene.enter('SCHEDULE');
+      }
+    },
 
-export default function createStage(bot) {
-    const calendar = new Calendar(bot, {
-        startWeekDay: 1,
-        weekDayNames: ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'],
-        monthNames: [
-            'Январь','Февраль','Март','Апрель','Май','Июнь',
-            'Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'
-        ]
-    });
+    async (ctx) => {
+        const group = await Group.create({name: ctx.message.text});
+        await UserGroup.create({
+            UserId: ctx.session.user.id,
+            GroupId: group.id,
+            isAdmin: true
+        });
 
-    const ScheduleScene = new Scenes.BaseScene('SCHEDULE');
-    
-    ScheduleScene.enter(async (ctx) => {
-        if (!ctx.session.groupId) {
-            await ctx.reply('Ошибка: не удалось определить вашу группу. Попробуйте /start.');
-            return ctx.scene.leave();
+        ctx.session.isAdmin = true;
+        ctx.session.group = group;
+        return ctx.scene.enter('SCHEDULE');
+    },
+
+    async (ctx) => {
+        const group = await Group.findOne({
+           where: { inviteCode: ctx.message.text }
+        });
+
+        if (!group) {
+            ctx.reply('Недійсне запрошення.');
+            return ctx.scene.enter('GROUP_SELECTOR');
         }
-        const today = new Date().toISOString().slice(0, 10);
-        await ctx.reply(`Расписание для вашей группы на ${today}:`, await getKeyboardForDate(ctx.session.groupId, today));
-    });
 
-    ScheduleScene.action(/sub_(\d+)/, async (ctx) => {
-        const lessonId = ctx.match[1];
-        const lesson = await Lesson.findByPk(lessonId, { include: Subject });
+        const member = await UserGroup.findOne({
+            where: {
+                UserId: ctx.session.user.id,
+                GroupId: group.id
+            }
+        });
 
-        if (!lesson) {
-            return ctx.answerCbQuery('Урок не найден!');
+        if (member) {
+            ctx.reply('Ви вже є в цій групі.');
+            return ctx.scene.enter('GROUP_SELECTOR');
         }
-        
-        let message = `*${lesson.Subject.name}*\n`;
-        message += `Время: ${lesson.timestamp}\n`;
-        message += `Тип: ${lesson.isPractice ? 'Практика' : 'Лекция'}\n\n`;
-        message += `Ссылка на встречу: ${lesson.meetingLink || 'Нет'}\n`;
-        message += `Домашнее задание: ${lesson.homework || 'Нет'}\n`;
 
-        await ctx.editMessageText(
-            message,
-            {
-                parse_mode: 'Markdown',
-                reply_markup: Markup.inlineKeyboard([
-                    [Markup.button.callback('Закрыть', 'exit')]
-                ]).reply_markup
-            }
-        );
-    });
+        await UserGroup.create({
+            UserId: ctx.session.user.id,
+            GroupId: group.id
+        });
 
-    ScheduleScene.action(/date_(\d{4}-\d{2}-\d{2})/, async (ctx) => {
-        const date = ctx.match[1];
-        const text = `Расписание для вашей группы на ${date}:`;
-        const keyboard = await getKeyboardForDate(ctx.session.groupId, date);
-        await ctx.editMessageText(text, { reply_markup: keyboard.reply_markup });
-    });
+        ctx.session.isAdmin = false;
+        ctx.session.group = group;
+        return ctx.scene.enter('SCHEDULE');
+    }
+);
 
-    ScheduleScene.action(/calendar_(\d{4}-\d{2}-\d{2})/, async (ctx) => {
-        const date = new Date(ctx.match[1]);
-        await ctx.editMessageText('Выберите дату:', calendar.getCalendar(date));
-    });
+const GroupSettings = new Scenes.WizardScene(
+    'GROUP_SETTINGS',
+    async (ctx) => {
+        await ctx.reply('⚙️ Налаштування *' + ctx.session.group.name + '*', Markup.inlineKeyboard([
+            [Markup.button.callback('👤 Учасники', 'members')],
+            [Markup.button.callback('↩️ Вибір групи', 'groups')],
+            [Markup.button.callback('⬅️ Назад', 'back')]
+        ]));
+        return ctx.wizard.next();
+    },
+    async (ctx) => {
+        const query = ctx.callbackQuery;
+        if (!query)
+            return;
 
-    calendar.setDateListener(async (ctx, date) => {
-        await ctx.deleteMessage();
-        const text = `Расписание для вашей группы на ${date}:`;
-        const keyboard = await getKeyboardForDate(ctx.session.groupId, date);
-        await ctx.reply(text, keyboard);
-    });
+        try {
+            await ctx.telegram.answerCbQuery(query.id);
+            await ctx.telegram.deleteMessage(ctx.session.user.id, ctx.callbackQuery.message.message_id);
+        } catch (error) { console.error(error); }
 
-    ScheduleScene.action('exit', async (ctx) => {
-        await ctx.editMessageText('Меню закрыто.');
-        return ctx.scene.leave();
-    });
+        switch (ctx.callbackQuery.data) {
+            case 'members':
+                ctx.session.group = await Group.findByPk(ctx.session.group.id, { include: User });
+                const inviteCode = ctx.session.group.inviteCode ? "\n🔗 Код запрошення: " + ctx.session.group.inviteCode : '';
+                const inviteToggle = ctx.session.group.inviteCode ? "🔓 Запрошення увімкнено" : "🔒 Запрошення вимкнено";
 
-    const GroupSelector = new Scenes.WizardScene(
-        'GROUP_SELECTOR',
-        async (ctx) => {
-            const [user, created] = await User.findOrCreate({
-                where: { id: ctx.from.id },
-            });
-            
-            await ctx.reply('Добро пожаловать! Создайте новую группу или присоединитесь к существующей:', Markup.inlineKeyboard([
-                [Markup.button.callback('Создать новую', 'new')],
-                [Markup.button.callback('Присоединиться', 'join')]
-            ]));
-            return ctx.wizard.next();
-        },
-        async (ctx) => {
-            if (!ctx.callbackQuery) return;
-            ctx.wizard.state.action = ctx.callbackQuery.data;
-            if (ctx.wizard.state.action === 'new') {
-                await ctx.editMessageText('Введите название для вашей группы:');
-            } else if (ctx.wizard.state.action === 'join') {
-                await ctx.editMessageText('Введите код приглашения группы:');
-            }
-            return ctx.wizard.next();
-        },
-        async (ctx) => {
-            if (!ctx.message?.text) return;
-            const user = await User.findByPk(ctx.from.id);
+                let buttons = [];
+                for (const member of ctx.session.group.Users) {
+                    const chat = await ctx.telegram.getChat(member.id)
+                    const name = chat.first_name + ' ' + (chat.last_name || '');
+                    const link = "https://t.me/" + chat.username;
 
-            if (ctx.wizard.state.action === 'new') {
-                const group = await Group.create({ name: ctx.message.text });
-                await user.addGroup(group, { through: { isAdmin: true } });
-                
-                ctx.session.groupId = group.id;
-
-                await ctx.reply(`Группа "${group.name}" успешно создана! Код для приглашения: \`${group.name}\` (нажмите, чтобы скопировать).`);
-                
-            } else if (ctx.wizard.state.action === 'join') {
-                const inviteCode = ctx.message.text;
-                const group = await Group.findOne({ where: { name: inviteCode } });
-                
-                if (!group) {
-                    await ctx.reply('Группа с таким кодом не найдена. Попробуйте еще раз или создайте новую /start.');
-                    return ctx.scene.reenter();
+                    buttons.push([
+                        Markup.button.url(name, link),
+                        ...ctx.session.isAdmin ? [
+                            Markup.button.callback('❌', member.id)
+                        ] : [],
+                    ]);
                 }
 
-                await user.addGroup(group, { through: { isAdmin: false } });
-                ctx.session.groupId = group.id;
-                await ctx.reply(`Вы успешно присоединились к группе "${group.name}"!`);
-            }
-            
-            return ctx.scene.enter('SCHEDULE');
-        }
-    );
+                await ctx.reply('👤 Учасники *' + ctx.session.group.name + '*' + inviteCode, Markup.inlineKeyboard([
+                    ...ctx.session.isAdmin ? [
+                        [Markup.button.callback(inviteToggle, 'toggleInvite')]
+                    ] : [],
+                    ...buttons,
+                    [Markup.button.callback('⬅️ Назад', 'back')]
+                ]));
+                return ctx.wizard.selectStep(2);
 
-    return new Scenes.Stage([GroupSelector, ScheduleScene]);
-}
+            case 'groups':
+                return ctx.scene.enter('GROUP_SELECTOR');
+
+            case 'back':
+                return ctx.scene.enter('SCHEDULE');
+
+            case 'new':
+                return;
+        }
+    },
+    async (ctx) => {
+        const query = ctx.callbackQuery;
+        if (!query)
+            return;
+
+        try {
+            await ctx.telegram.answerCbQuery(query.id);
+            await ctx.telegram.deleteMessage(ctx.session.user.id, ctx.callbackQuery.message.message_id);
+        } catch (error) { console.error(error); }
+
+        switch (ctx.callbackQuery.data) {
+            case 'toggleInvite':
+                if (ctx.session.group.inviteCode) {
+                    ctx.session.group.inviteCode = null;
+                    await ctx.session.group.save();
+                } else {
+                    let success = true;
+                    do {
+                        try {
+                            const min = 10000000;
+                            const max = 99999999;
+                            const code = Math.floor(Math.random() * (max - min + 1)) + min;
+                            ctx.session.group.inviteCode = code;
+                            await ctx.session.group.save();
+                        } catch (err) {
+                            console.error(err);
+                            success = false;
+                        }
+                    } while (!success);
+                }
+                return ctx.scene.enter('GROUP_SETTINGS');
+
+            case 'back':
+                return ctx.scene.enter('GROUP_SETTINGS');
+
+            default:
+                return;
+        }
+    }
+);
+
+const Schedule = new Scenes.WizardScene(
+    'SCHEDULE',
+    async (ctx) => {
+        if (!ctx.session.date)
+            ctx.session.date = new Date();
+
+        const formattedDate = new Intl.DateTimeFormat("uk-UA").format(ctx.session.date);
+        const dayOfWeek = ctx.session.date.toLocaleDateString('uk-UA', { weekday: 'short' });
+
+        await ctx.reply('<<< 📅 Розклад на ' + formattedDate + ' >>>', Markup.inlineKeyboard([
+            [Markup.button.callback('', '1')],
+            [Markup.button.callback('', '2')],
+            [Markup.button.callback('', '3')],
+            [Markup.button.callback('', '4')],
+            [Markup.button.callback('', '5')],
+            ...ctx.session.isAdmin ? [
+                [Markup.button.callback('➕ Додати пару', 'new')]
+            ] : [],
+            [Markup.button.callback('⚙️ Налаштування', 'settings')],
+            [
+                Markup.button.callback('<<<', 'prev'),
+                Markup.button.callback(dayOfWeek, 'date'),
+                Markup.button.callback('>>>', 'next'),
+            ]
+        ]));
+
+        return ctx.wizard.next();
+    },
+
+    async (ctx) => {
+        const query = ctx.callbackQuery;
+        if (!query)
+            return;
+
+        try {
+            await ctx.telegram.answerCbQuery(query.id);
+            await ctx.telegram.deleteMessage(ctx.session.user.id, ctx.callbackQuery.message.message_id);
+        } catch (error) { console.error(error); }
+
+        switch (ctx.callbackQuery.data) {
+            case 'prev':
+                ctx.session.date.setDate(ctx.session.date.getDate() - 1);
+                return ctx.scene.enter('SCHEDULE');
+
+            case 'next':
+                ctx.session.date.setDate(ctx.session.date.getDate() + 1);
+                return ctx.scene.enter('SCHEDULE');
+
+            case 'settings':
+                return ctx.scene.enter('GROUP_SETTINGS');
+
+            case 'new':
+                return;
+
+            /*default:
+                ctx.session.group = await Group.findByPk(ctx.callbackQuery.data);
+                return ctx.scene.enter('SCHEDULE');*/
+        }
+    }
+);
+
+export default new Scenes.Stage([GroupSelector, GroupSettings, Schedule]);

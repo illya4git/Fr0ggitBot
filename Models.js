@@ -20,15 +20,19 @@ Group.init({
         primaryKey: true,
         autoIncrement: true
     },
-    name: { type: DataTypes.STRING }
+    name: { type: DataTypes.STRING },
+    inviteCode: {
+        type: DataTypes.STRING,
+        unique: true
+    }
 }, {sequelize});
 
-export class UserGroups extends Model {}
-UserGroups.init({
+export class UserGroup extends Model {}
+UserGroup.init({
     isAdmin: { type: DataTypes.BOOLEAN }
 }, {sequelize});
-User.belongsToMany(Group, { through: UserGroups });
-Group.belongsToMany(User, { through: UserGroups });
+User.belongsToMany(Group, { through: UserGroup });
+Group.belongsToMany(User, { through: UserGroup });
 
 export class Subject extends Model {}
 Subject.init({
