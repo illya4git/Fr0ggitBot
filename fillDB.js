@@ -1,6 +1,7 @@
+// ...existing code...
 import { Group, Subject, Lesson, sequelize } from './Models.js';
 
-async function fillScheduleFromApi(groupName = "ІП-56") {
+async function fillScheduleFromApi(groupName = "ІП-56", defaultLabLinks = ['https://example.com/queue.xlsx']) {
     // список групп
     const res = await fetch("https://api.campus.kpi.ua/group/all");
     const groups = await res.json();
@@ -10,10 +11,21 @@ async function fillScheduleFromApi(groupName = "ІП-56") {
         return;
     }
 
-
     let [group] = await Group.findOrCreate({
         where: { name: groupData.name }
     });
+
+    // установим дефолтную очередь (labLinks) если поле пустое или null
+    try {
+        const hasLinks = group.labLinks && group.labLinks.trim().length > 0;
+        if (!hasLinks) {
+            group.labLinks = JSON.stringify(defaultLabLinks);
+            await group.save();
+            console.log('Добавлена дефолтная черга на лабу для группы:', group.name);
+        }
+    } catch (e) {
+        console.error('Ошибка при установке дефолтной черги:', e);
+    }
 
     // расписание
     const lessonsRes = await fetch(`https://api.campus.kpi.ua/schedule/lessons?groupId=${groupData.id}`);
