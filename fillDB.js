@@ -1,8 +1,6 @@
-// ...existing code...
 import { Group, Subject, Lesson, sequelize } from './Models.js';
 
 async function fillScheduleFromApi(groupName = "ІП-56", defaultLabLinks = ['https://example.com/queue.xlsx']) {
-    // список групп
     const res = await fetch("https://api.campus.kpi.ua/group/all");
     const groups = await res.json();
     const groupData = groups.find(g => g.name === groupName);
@@ -15,7 +13,6 @@ async function fillScheduleFromApi(groupName = "ІП-56", defaultLabLinks = ['ht
         where: { name: groupData.name }
     });
 
-    // установим дефолтную очередь (labLinks) если поле пустое или null
     try {
         const hasLinks = group.labLinks && group.labLinks.trim().length > 0;
         if (!hasLinks) {
@@ -27,37 +24,62 @@ async function fillScheduleFromApi(groupName = "ІП-56", defaultLabLinks = ['ht
         console.error('Ошибка при установке дефолтной черги:', e);
     }
 
-    // расписание
+
     const lessonsRes = await fetch(`https://api.campus.kpi.ua/schedule/lessons?groupId=${groupData.id}`);
     const scheduleObj = await lessonsRes.json();
 
-    async function processWeek(weekArr, weekType) {
+    async function processWeek(weekArr, weekType, t) {
         for (const dayObj of weekArr) {
+            const dayName = dayObj.day; 
             for (const pair of dayObj.pairs) {
-                // Создаём или находим предмет
-                let [subject] = await Subject.findOrCreate({
-                    where: { name: pair.name },
-                    defaults: { GroupId: group.id }
+                const time = pair.time ? String(pair.time).trim() : null;
+                const subjName = pair.name ? String(pair.name).trim() : 'Не вказано';
+
+                const [subject] = await Subject.findOrCreate({
+                    where: { name: subjName, GroupId: group.id },
+                    defaults: { GroupId: group.id },
+                    transaction: t
                 });
 
-                // Добавляем занятие
-                await Lesson.create({
-                    timestamp: pair.time, 
-                    isPractice: pair.type === 'Прак',
-                    meetingLink: pair.meetingLink || null,
-                    recordingLink: pair.recordingLink || null,
-                    homework: pair.homework || null,
-                    GroupId: group.id,
-                    SubjectId: subject.id,
-                    day: dayObj.day,         // День недели 
-                    weekType: weekType       // Тип недели 
+            
+                const [lesson, created] = await Lesson.findOrCreate({
+                    where: {
+                        GroupId: group.id,
+                        SubjectId: subject.id,
+                        day: dayName,
+                        timestamp: time,
+                        weekType: weekType
+                    },
+                    defaults: {
+                        timestamp: time,
+                        isPractice: pair.type === 'Прак',
+                        meetingLink: pair.meetingLink || null,
+                        recordingLink: pair.recordingLink || null,
+                        homework: pair.homework || null,
+                        GroupId: group.id,
+                        SubjectId: subject.id,
+                        day: dayName,
+                        weekType: weekType
+                    },
+                    transaction: t
                 });
+
+            
+                if (!created) {
+                    let changed = false;
+                    if (pair.meetingLink && lesson.meetingLink !== pair.meetingLink) { lesson.meetingLink = pair.meetingLink; changed = true; }
+                    if (pair.recordingLink && lesson.recordingLink !== pair.recordingLink) { lesson.recordingLink = pair.recordingLink; changed = true; }
+                    if (pair.homework && lesson.homework !== pair.homework) { lesson.homework = pair.homework; changed = true; }
+                    if (changed) await lesson.save({ transaction: t });
+                }
             }
         }
     }
 
-    await processWeek(scheduleObj.scheduleFirstWeek, 'first');
-    await processWeek(scheduleObj.scheduleSecondWeek, 'second');
+    await sequelize.transaction(async (t) => {
+        await processWeek(scheduleObj.scheduleFirstWeek || [], 'first', t);
+        await processWeek(scheduleObj.scheduleSecondWeek || [], 'second', t);
+    });
 
     console.log('База данных заполнена!');
 }

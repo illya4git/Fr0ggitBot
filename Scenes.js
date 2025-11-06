@@ -2,32 +2,25 @@ import { Scenes, Markup } from 'telegraf';
 import { Op } from 'sequelize';
 import { User, Group, UserGroup, Subject, Lesson } from './Models.js';
 
-// Helper: render month calendar (Mon..Sun)
 async function sendMonthCalendar(ctx, baseDate) {
   const year = baseDate.getFullYear();
-  const month = baseDate.getMonth(); // 0..11
+  const month = baseDate.getMonth(); 
   const firstDay = new Date(year, month, 1);
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const monthName = firstDay.toLocaleString('uk-UA', { month: 'long' });
 
-  // header row: prev, month year, next
   const headerRow = [
     Markup.button.callback('‹', `cal_nav_prev_${year}_${month}`),
     Markup.button.callback(`${monthName.charAt(0).toUpperCase() + monthName.slice(1)} ${year}`, 'noop'),
     Markup.button.callback('›', `cal_nav_next_${year}_${month}`)
   ];
 
-  // weekdays row (Mon .. Sun)
   const weekdays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
   const weekdayRow = weekdays.map(w => Markup.button.callback(w, 'noop'));
-
-  // compute leading blanks (make Monday = 0)
-  const firstWeekdayMondayIndex = (firstDay.getDay() + 6) % 7; // 0..6
+  const firstWeekdayMondayIndex = (firstDay.getDay() + 6) % 7;
   const cells = [];
 
-  // leading blanks
   for (let i = 0; i < firstWeekdayMondayIndex; i++) cells.push(null);
-  // days
   for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(year, month, d));
 
   const rows = [];
@@ -159,15 +152,18 @@ const LabQueue = new Scenes.WizardScene(
     if (links.length === 0) {
       rows.push([ Markup.button.callback('Немає посилань', 'noop') ]);
     } else {
-      
       for (let i = 0; i < links.length; i++) {
         const url = links[i];
         const label = (url.length > 30) ? url.slice(0,27) + '...' : url;
-        rows.push([ Markup.button.url(label, url), Markup.button.callback('❌', `lab_del_${gid}_${i}`) ]);
+        const row = [ Markup.button.url(label, url) ];
+        if (ctx.session.isAdmin) row.push(Markup.button.callback('❌', `lab_del_${gid}_${i}`));
+        rows.push(row);
       }
     }
 
-    rows.push([ Markup.button.callback('➕ Додати посилання', `lab_add_${gid}`) ]);
+    if (ctx.session.isAdmin) {
+      rows.push([ Markup.button.callback('➕ Додати посилання', `lab_add_${gid}`) ]);
+    }
     rows.push([ Markup.button.callback('Назад', 'lab_back_to_group') ]);
 
     await ctx.reply(`Черга на лабу — група: ${group.name}`, Markup.inlineKeyboard(rows));
@@ -189,6 +185,10 @@ const LabQueue = new Scenes.WizardScene(
     }
 
     if (d.startsWith('lab_add_')) {
+      if (!ctx.session.isAdmin) {
+        await ctx.reply('У вас немає прав для додавання посилань.');
+        return ctx.scene.enter('LAB_QUEUE');
+      }
       const gid = Number(d.replace('lab_add_',''));
       ctx.session.labTargetGroupId = gid;
       await ctx.reply('Надішліть посилання на Excel (URL). Відправте /cancel для скасування.');
@@ -196,7 +196,10 @@ const LabQueue = new Scenes.WizardScene(
     }
 
     if (d.startsWith('lab_del_')) {
-      // format lab_del_{groupId}_{index}
+      if (!ctx.session.isAdmin) {
+        await ctx.reply('У вас немає прав для видалення посилань.');
+        return ctx.scene.enter('LAB_QUEUE');
+      }
       const parts = d.split('_');
       const gid = Number(parts[2]);
       const idx = Number(parts[3]);
@@ -221,7 +224,7 @@ const LabQueue = new Scenes.WizardScene(
     return ctx.scene.enter('LAB_QUEUE');
   },
 
- 
+
   async (ctx) => {
     const text = ctx.message?.text;
     if (!text) {
@@ -232,7 +235,7 @@ const LabQueue = new Scenes.WizardScene(
       ctx.session.labTargetGroupId = null;
       return ctx.scene.enter('LAB_QUEUE');
     }
-  
+
     const url = text.trim();
     if (!/^https?:\/\/\S+$/i.test(url)) {
       await ctx.reply('Неправильний формат URL. Починається з http:// або https://');
@@ -278,26 +281,46 @@ const GroupSettings = new Scenes.WizardScene(
     if (!query) return;
     try { await ctx.telegram.answerCbQuery(query.id).catch(()=>{}); } catch {}
     const d = query.data;
+
     if (d === 'members') {
       ctx.session.group = await Group.findByPk(ctx.session.group.id, { include: User });
       const inviteToggle = ctx.session.group.inviteCode ? "🔓 Запрошення увімкнено" : "🔒 Запрошення вимкнено";
 
       const buttons = [];
       for (const member of ctx.session.group.Users || []) {
+        const ug = await UserGroup.findOne({ where: { UserId: member.id, GroupId: ctx.session.group.id }});
+        const isMemberAdmin = ug ? !!ug.isAdmin : false;
         const chat = await ctx.telegram.getChat(member.id).catch(()=>null);
         const name = chat ? (chat.first_name + ' ' + (chat.last_name || '')) : String(member.id);
         const link = chat && chat.username ? "https://t.me/" + chat.username : null;
-        buttons.push([
-          link ? Markup.button.url(name, link) : Markup.button.callback(name, 'noop'),
-          ...ctx.session.isAdmin ? [ Markup.button.callback('❌', String(member.id)) ] : []
-        ]);
+
+        const row = [];
+        row.push(link ? Markup.button.url(name, link) : Markup.button.callback(name, 'noop'));
+
+        if (ctx.session.isAdmin) {
+          // don't allow changing your own admin flag or removing yourself here
+          if (member.id !== ctx.session.user.id) {
+            if (isMemberAdmin) {
+              row.push(Markup.button.callback('👑', `revoke_admin_${member.id}`));
+            } else {
+              row.push(Markup.button.callback('⭐', `make_admin_${member.id}`));
+            }
+            row.push(Markup.button.callback('❌', `remove_${member.id}`));
+          } else {
+            if (isMemberAdmin) row.push(Markup.button.callback('Ви (адмін)', 'noop'));
+          }
+        }
+
+        buttons.push(row);
       }
 
-      await ctx.reply('👤 Учасники *' + ctx.session.group.name + '*', Markup.inlineKeyboard([
+      const keyboardRows = [
         ...ctx.session.isAdmin ? [ [ Markup.button.callback(inviteToggle, 'toggleInvite') ] ] : [],
         ...buttons,
         [ Markup.button.callback('⬅️ Назад', 'back') ]
-      ]));
+      ];
+
+      await ctx.reply('👤 Учасники *' + ctx.session.group.name + '*', Markup.inlineKeyboard(keyboardRows));
       return ctx.wizard.selectStep(2);
     }
 
@@ -311,7 +334,12 @@ const GroupSettings = new Scenes.WizardScene(
     if (!query) return;
     try { await ctx.telegram.answerCbQuery(query.id).catch(()=>{}); } catch {}
     const d = query.data;
+
     if (d === 'toggleInvite') {
+      if (!ctx.session.isAdmin) {
+        await ctx.reply('У вас немає прав.');
+        return ctx.scene.enter('GROUP_SETTINGS');
+      }
       if (ctx.session.group.inviteCode) {
         ctx.session.group.inviteCode = null;
         await ctx.session.group.save();
@@ -329,7 +357,57 @@ const GroupSettings = new Scenes.WizardScene(
       }
       return ctx.scene.enter('GROUP_SETTINGS');
     }
-    if (d === 'back') return ctx.scene.enter('GROUP_SETTINGS');
+
+    if (d && d.startsWith('make_admin_')) {
+      if (!ctx.session.isAdmin) {
+        await ctx.reply('У вас немає прав.');
+        return ctx.scene.enter('GROUP_SETTINGS');
+      }
+      const uid = Number(d.replace('make_admin_',''));
+      const [ug] = await UserGroup.findOrCreate({ where: { UserId: uid, GroupId: ctx.session.group.id }, defaults: { isAdmin: true }});
+      ug.isAdmin = true;
+      await ug.save();
+      await ctx.reply('Роль адміністратора видана.');
+      return ctx.scene.enter('GROUP_SETTINGS');
+    }
+
+    if (d && d.startsWith('revoke_admin_')) {
+      if (!ctx.session.isAdmin) {
+        await ctx.reply('У вас немає прав.');
+        return ctx.scene.enter('GROUP_SETTINGS');
+      }
+      const uid = Number(d.replace('revoke_admin_',''));
+      if (uid === ctx.session.user.id) {
+        await ctx.reply('Не можна забрати у себе права адміністратора.');
+        return ctx.scene.enter('GROUP_SETTINGS');
+      }
+      const ug = await UserGroup.findOne({ where: { UserId: uid, GroupId: ctx.session.group.id }});
+      if (!ug) {
+        await ctx.reply('Користувач не є учасником групи.');
+        return ctx.scene.enter('GROUP_SETTINGS');
+      }
+      ug.isAdmin = false;
+      await ug.save();
+      await ctx.reply('Роль адміністратора забрана.');
+      return ctx.scene.enter('GROUP_SETTINGS');
+    }
+
+    if (d && d.startsWith('remove_')) {
+      if (!ctx.session.isAdmin) {
+        await ctx.reply('У вас немає прав.');
+        return ctx.scene.enter('GROUP_SETTINGS');
+      }
+      const uid = Number(d.replace('remove_',''));
+      if (uid === ctx.session.user.id) {
+        await ctx.reply('Не можна видалити себе з групи.');
+        return ctx.scene.enter('GROUP_SETTINGS');
+      }
+      await UserGroup.destroy({ where: { UserId: uid, GroupId: ctx.session.group.id }});
+      await ctx.reply('Користувача видалено з групи.');
+      return ctx.scene.enter('GROUP_SETTINGS');
+    }
+
+    if (d === 'back') return ctx.scene.enter('SCHEDULE');
     return;
   }
 );
@@ -411,12 +489,17 @@ const Schedule = new Scenes.WizardScene(
     const query = ctx.callbackQuery;
     if (!query) return;
 
+    const d = query.data;
+
+    if (d === 'noop') {
+      try { await ctx.telegram.answerCbQuery(query.id).catch(()=>{}); } catch {}
+      return; 
+    }
+
     try {
       await ctx.telegram.answerCbQuery(query.id).catch(()=>{});
-      await ctx.telegram.deleteMessage(ctx.session.user.id, ctx.callbackQuery.message.message_id).catch(()=>{});
+      await ctx.telegram.deleteMessage(ctx.session.user.id, query.message.message_id).catch(()=>{});
     } catch {}
-
-    const d = ctx.callbackQuery.data;
 
     if (d && d.startsWith('lesson_')) {
       const id = Number(d.replace('lesson_',''));
@@ -433,12 +516,19 @@ const Schedule = new Scenes.WizardScene(
       const practice = lesson.isPractice ? 'Практика' : 'Лекція';
       const hw = lesson.homework || 'Нет';
       const link = lesson.meetingLink || null;
+      const aud = lesson.audience || 'Немає';
 
-      const info = `Пара:\nПредмет: ${subj}\nВремя: ${time}\nДень: ${day}\nТип недели: ${week}\n${practice}\n\nДомашнее: ${hw}\nПосилання: ${link ? link : 'Немає'}`;
+      const info = `Пара:\nПредмет: ${subj}\nВремя: ${time}\nДень: ${day}\nТип недели: ${week}\n${practice}\n\nДомашнее: ${hw}\nАудиторія: ${aud}\nПосилання: ${link ? link : 'Немає'}`;
+
+      const adminRow = [];
+      if (ctx.session.isAdmin) {
+        adminRow.push(Markup.button.callback('🏫 Аудиторія', `aud_${lesson.id}`));
+        adminRow.push(Markup.button.callback('🔗 Посилання', `link_${lesson.id}`));
+      }
 
       const kb = Markup.inlineKeyboard([
         [ Markup.button.callback('Додати дз', `addhw_${lesson.id}`) ],
-        [ Markup.button.callback('🔗 Посилання', `link_${lesson.id}`) ],
+        ...(adminRow.length ? [ adminRow ] : []),
         [ Markup.button.callback('Назад', 'back_to_schedule') ]
       ]);
 
@@ -447,9 +537,23 @@ const Schedule = new Scenes.WizardScene(
     }
 
     if (d && d.startsWith('link_')) {
+      if (!ctx.session.isAdmin) {
+        await ctx.reply('У вас немає прав для зміни посилань.');
+        return ctx.scene.enter('SCHEDULE');
+      }
       const id = Number(d.replace('link_',''));
       ctx.session.pendingLinkLessonId = id;
       return ctx.scene.enter('EDIT_LINK');
+    }
+
+    if (d && d.startsWith('aud_')) {
+      if (!ctx.session.isAdmin) {
+        await ctx.reply('У вас немає прав для зміни аудиторії.');
+        return ctx.scene.enter('SCHEDULE');
+      }
+      const id = Number(d.replace('aud_',''));
+      ctx.session.pendingAudLessonId = id;
+      return ctx.scene.enter('EDIT_AUDIENCE');
     }
 
     if (d === 'date') {
@@ -517,7 +621,6 @@ const Schedule = new Scenes.WizardScene(
     return;
   }
 );
-
 
 
 
@@ -803,7 +906,6 @@ const EditLink = new Scenes.WizardScene(
 
 
 
-
 const AddHomework = new Scenes.WizardScene(
   'ADD_HOMEWORK',
   async (ctx) => {
@@ -840,6 +942,67 @@ const AddHomework = new Scenes.WizardScene(
     return ctx.scene.enter('SCHEDULE');
   }
 );
+const EditAudience = new Scenes.WizardScene(
+  'EDIT_AUDIENCE',
+  async (ctx) => {
+    const id = ctx.session.pendingAudLessonId;
+    if (!id) {
+      await ctx.reply('Не вказана пара.');
+      return ctx.scene.enter('SCHEDULE');
+    }
+    const lesson = await Lesson.findByPk(id, { include: Subject });
+    if (!lesson) {
+      await ctx.reply('Пара не знайдена.');
+      ctx.session.pendingAudLessonId = null;
+      return ctx.scene.enter('SCHEDULE');
+    }
+    const current = lesson.audience || 'Немає';
+    await ctx.reply(`Поточна аудиторія: ${current}\n\nНадішліть нову аудиторію (наприклад "Ауд. 401"), або надішліть /remove для видалення, /cancel — відміна.`);
+    return ctx.wizard.next();
+  },
+
+  async (ctx) => {
+    if (!ctx.session.isAdmin) {
+      await ctx.reply('У вас немає прав для зміни аудиторії.');
+      ctx.session.pendingAudLessonId = null;
+      return ctx.scene.enter('SCHEDULE');
+    }
+
+    const text = ctx.message?.text;
+    if (!text) {
+      await ctx.reply('Будь ласка, надішліть текст з аудиторією або команду.');
+      return;
+    }
+
+    const id = ctx.session.pendingAudLessonId;
+    const lesson = await Lesson.findByPk(id);
+    if (!lesson) {
+      await ctx.reply('Пара не знайдена.');
+      ctx.session.pendingAudLessonId = null;
+      return ctx.scene.enter('SCHEDULE');
+    }
+
+    if (text === '/cancel' || text.toLowerCase() === 'відміна' || text.toLowerCase() === 'cancel') {
+      ctx.session.pendingAudLessonId = null;
+      return ctx.scene.enter('SCHEDULE');
+    }
+
+    if (text === '/remove' || text.toLowerCase() === 'видалити' || text.toLowerCase() === 'remove') {
+      lesson.audience = null;
+      await lesson.save();
+      ctx.session.pendingAudLessonId = null;
+      await ctx.reply('Аудиторія видалена.');
+      return ctx.scene.enter('SCHEDULE');
+    }
+
+    const aud = text.trim();
+    lesson.audience = aud;
+    await lesson.save();
+    ctx.session.pendingAudLessonId = null;
+    await ctx.reply('Аудиторія збережена.');
+    return ctx.scene.enter('SCHEDULE');
+  }
+);
 
 
-export default new Scenes.Stage([ GroupSelector, GroupSettings, Schedule, AddLesson, AddHomework, LabQueue, EditLink ]);
+export default new Scenes.Stage([ GroupSelector, GroupSettings, Schedule, AddLesson, AddHomework, LabQueue, EditLink, EditAudience ]);
