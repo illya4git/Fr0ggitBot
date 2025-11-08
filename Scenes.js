@@ -148,13 +148,26 @@ const LabQueue = new Scenes.WizardScene(
     let links = [];
     try { links = group.labLinks ? JSON.parse(group.labLinks) : []; } catch (e) { links = []; }
 
+    links = links.map(item => {
+      if (!item) return null;
+      if (typeof item === 'string') {
+        const url = item;
+        const label = (url.length > 30) ? url.slice(0,27) + '...' : url;
+        return { label, url };
+      }
+      if (typeof item === 'object' && item.url) {
+        const label = item.label ? String(item.label) : (String(item.url).length > 30 ? String(item.url).slice(0,27) + '...' : String(item.url));
+        return { label, url: String(item.url) };
+      }
+      return null;
+    }).filter(Boolean);
+
     const rows = [];
     if (links.length === 0) {
       rows.push([ Markup.button.callback('Немає посилань', 'noop') ]);
     } else {
       for (let i = 0; i < links.length; i++) {
-        const url = links[i];
-        const label = (url.length > 30) ? url.slice(0,27) + '...' : url;
+        const { label, url } = links[i];
         const row = [ Markup.button.url(label, url) ];
         if (ctx.session.isAdmin) row.push(Markup.button.callback('❌', `lab_del_${gid}_${i}`));
         rows.push(row);
@@ -170,7 +183,6 @@ const LabQueue = new Scenes.WizardScene(
     return ctx.wizard.next();
   },
 
-
   async (ctx) => {
     const q = ctx.callbackQuery;
     if (!q) return;
@@ -181,6 +193,7 @@ const LabQueue = new Scenes.WizardScene(
 
     if (d === 'lab_back_to_group') {
       ctx.session.labTargetGroupId = null;
+      ctx.session.pendingLabLabel = null;
       return ctx.scene.enter('SCHEDULE');
     }
 
@@ -191,7 +204,8 @@ const LabQueue = new Scenes.WizardScene(
       }
       const gid = Number(d.replace('lab_add_',''));
       ctx.session.labTargetGroupId = gid;
-      await ctx.reply('Надішліть посилання на Excel (URL). Відправте /cancel для скасування.');
+      ctx.session.pendingLabLabel = null;
+      await ctx.reply('Надішліть назву посилання (короткий заголовок). Відправте /cancel для скасування.');
       return ctx.wizard.selectStep(2);
     }
 
@@ -224,15 +238,33 @@ const LabQueue = new Scenes.WizardScene(
     return ctx.scene.enter('LAB_QUEUE');
   },
 
-
   async (ctx) => {
     const text = ctx.message?.text;
     if (!text) {
-      await ctx.reply('Будь ласка, надішліть текст з посиланням.');
+      await ctx.reply('Будь ласка, надішліть назву текстом або /cancel.');
       return;
     }
     if (text === '/cancel' || text.toLowerCase() === 'скасувати' || text.toLowerCase() === 'відміна') {
       ctx.session.labTargetGroupId = null;
+      ctx.session.pendingLabLabel = null;
+      return ctx.scene.enter('LAB_QUEUE');
+    }
+
+    ctx.session.pendingLabLabel = text.trim().slice(0, 200); // limit length
+    await ctx.reply('Тепер надішліть URL (починається з http:// або https://). Відправте /cancel для скасування.');
+    return ctx.wizard.next();
+  },
+
+
+  async (ctx) => {
+    const text = ctx.message?.text;
+    if (!text) {
+      await ctx.reply('Будь ласка, надішліть текст з посиланням або /cancel.');
+      return;
+    }
+    if (text === '/cancel' || text.toLowerCase() === 'скасувати' || text.toLowerCase() === 'відміна') {
+      ctx.session.labTargetGroupId = null;
+      ctx.session.pendingLabLabel = null;
       return ctx.scene.enter('LAB_QUEUE');
     }
 
@@ -247,16 +279,20 @@ const LabQueue = new Scenes.WizardScene(
     if (!group) {
       await ctx.reply('Група не знайдена.');
       ctx.session.labTargetGroupId = null;
+      ctx.session.pendingLabLabel = null;
       return ctx.scene.enter('GROUP_SELECTOR');
     }
 
     let links = [];
     try { links = group.labLinks ? JSON.parse(group.labLinks) : []; } catch (e) { links = []; }
-    links.push(url);
+
+    const label = ctx.session.pendingLabLabel || ((url.length > 30) ? url.slice(0,27) + '...' : url);
+    links.push({ label, url });
     group.labLinks = JSON.stringify(links);
     await group.save();
 
     ctx.session.labTargetGroupId = null;
+    ctx.session.pendingLabLabel = null;
     await ctx.reply('Посилання додано.');
     return ctx.scene.enter('LAB_QUEUE');
   }
@@ -298,7 +334,7 @@ const GroupSettings = new Scenes.WizardScene(
         row.push(link ? Markup.button.url(name, link) : Markup.button.callback(name, 'noop'));
 
         if (ctx.session.isAdmin) {
-          // don't allow changing your own admin flag or removing yourself here
+          // not allow changing your own admin flag or removing yourself 
           if (member.id !== ctx.session.user.id) {
             if (isMemberAdmin) {
               row.push(Markup.button.callback('👑', `revoke_admin_${member.id}`));
@@ -473,14 +509,7 @@ const Schedule = new Scenes.WizardScene(
 
     let text = `<<< 📅 Розклад на ${formattedDate} (${dayLabel}) >>>\n\n`;
     if (!lessons || lessons.length === 0) text += 'На обрану дату немає пар.';
-    else {
-      for (const l of lessons) {
-        const time = l.timestamp || '—';
-        const subj = l.Subject ? l.Subject.name : 'Не вказано';
-        text += `${time} — ${subj}\n`;
-      }
-    }
-
+   
     await ctx.reply(text, Markup.inlineKeyboard(keyboard));
     return ctx.wizard.next();
   },
@@ -518,7 +547,7 @@ const Schedule = new Scenes.WizardScene(
       const link = lesson.meetingLink || null;
       const aud = lesson.audience || 'Немає';
 
-      const info = `Пара:\nПредмет: ${subj}\nВремя: ${time}\nДень: ${day}\nТип недели: ${week}\n${practice}\n\nДомашнее: ${hw}\nАудиторія: ${aud}\nПосилання: ${link ? link : 'Немає'}`;
+      const info = `Пара:\nПредмет: ${subj}\nЧас: ${time}\n${practice}\n\nДомашнє: ${hw}\nАудиторія: ${aud}\nПосилання: ${link ? link : 'Немає'}`;
 
       const adminRow = [];
       if (ctx.session.isAdmin) {
@@ -909,7 +938,15 @@ const EditLink = new Scenes.WizardScene(
 const AddHomework = new Scenes.WizardScene(
   'ADD_HOMEWORK',
   async (ctx) => {
+    if (!ctx.session.isAdmin) {
+      await ctx.reply('У вас немає прав для зміни домашніх.');
+      ctx.session.pendingLinkLessonId = null;
+      return ctx.scene.enter('SCHEDULE');
+    }
+  },
+  async (ctx) => {
     const lessonId = ctx.session.pendingHomeworkLessonId;
+    
     if (!lessonId) {
       await ctx.reply('Помилка: не вказана пара для додавання домашнього завдання.');
       return ctx.scene.enter('SCHEDULE');
@@ -942,6 +979,8 @@ const AddHomework = new Scenes.WizardScene(
     return ctx.scene.enter('SCHEDULE');
   }
 );
+
+
 const EditAudience = new Scenes.WizardScene(
   'EDIT_AUDIENCE',
   async (ctx) => {
@@ -957,7 +996,7 @@ const EditAudience = new Scenes.WizardScene(
       return ctx.scene.enter('SCHEDULE');
     }
     const current = lesson.audience || 'Немає';
-    await ctx.reply(`Поточна аудиторія: ${current}\n\nНадішліть нову аудиторію (наприклад "Ауд. 401"), або надішліть /remove для видалення, /cancel — відміна.`);
+    await ctx.reply(`Поточна аудиторія: ${current}\n\nНадішліть нову аудиторію тільки цифрами (наприклад "401"), або надішліть /remove для видалення, /cancel — відміна.`);
     return ctx.wizard.next();
   },
 
@@ -968,7 +1007,7 @@ const EditAudience = new Scenes.WizardScene(
       return ctx.scene.enter('SCHEDULE');
     }
 
-    const text = ctx.message?.text;
+    const text = (ctx.message?.text || '').trim();
     if (!text) {
       await ctx.reply('Будь ласка, надішліть текст з аудиторією або команду.');
       return;
@@ -989,15 +1028,21 @@ const EditAudience = new Scenes.WizardScene(
 
     if (text === '/remove' || text.toLowerCase() === 'видалити' || text.toLowerCase() === 'remove') {
       lesson.audience = null;
-      await lesson.save();
+      await lesson.save({ fields: ['audience'] });
       ctx.session.pendingAudLessonId = null;
       await ctx.reply('Аудиторія видалена.');
       return ctx.scene.enter('SCHEDULE');
     }
 
-    const aud = text.trim();
-    lesson.audience = aud;
-    await lesson.save();
+
+    if (!/^\d+$/.test(text)) {
+      await ctx.reply('Невірний формат аудиторії. Допускаються тільки цифри, наприклад: 401');
+      return;
+    }
+
+    lesson.audience = text;
+    await lesson.save({ fields: ['audience'] });
+
     ctx.session.pendingAudLessonId = null;
     await ctx.reply('Аудиторія збережена.');
     return ctx.scene.enter('SCHEDULE');

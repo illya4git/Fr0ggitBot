@@ -46,7 +46,8 @@ Lesson.init({
   recordingLink: { type: DataTypes.STRING },
   homework: { type: DataTypes.STRING },
   day: { type: DataTypes.STRING },
-  weekType: { type: DataTypes.STRING }
+  weekType: { type: DataTypes.STRING },
+  audience: { type: DataTypes.STRING, allowNull: true }
 }, { sequelize, modelName: 'Lesson' });
 Lesson.belongsTo(Group);
 Lesson.belongsTo(Subject);

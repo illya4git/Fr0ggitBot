@@ -24,16 +24,30 @@ async function fillScheduleFromApi(groupName = "ІП-56", defaultLabLinks = ['ht
         console.error('Ошибка при установке дефолтной черги:', e);
     }
 
-
     const lessonsRes = await fetch(`https://api.campus.kpi.ua/schedule/lessons?groupId=${groupData.id}`);
     const scheduleObj = await lessonsRes.json();
 
     async function processWeek(weekArr, weekType, t) {
         for (const dayObj of weekArr) {
-            const dayName = dayObj.day; 
+            const dayName = dayObj.day;
             for (const pair of dayObj.pairs) {
                 const time = pair.time ? String(pair.time).trim() : null;
                 const subjName = pair.name ? String(pair.name).trim() : 'Не вказано';
+
+                // detect audience from various possible fields in API response
+                let rawAud = null;
+                if (pair.audience) rawAud = pair.audience;
+                else if (pair.room) rawAud = pair.room;
+                else if (pair.auditorium) rawAud = pair.auditorium;
+                else if (pair.aud) rawAud = pair.aud;
+                else if (pair.roomNumber) rawAud = pair.roomNumber;
+                // normalize audience: prefer digits only if present
+                let audVal = null;
+                if (rawAud != null) {
+                    const s = String(rawAud).trim();
+                    const m = s.match(/\d+/);
+                    audVal = m ? m[0] : s; // keep numeric part if exists, otherwise whole string
+                }
 
                 const [subject] = await Subject.findOrCreate({
                     where: { name: subjName, GroupId: group.id },
@@ -41,7 +55,6 @@ async function fillScheduleFromApi(groupName = "ІП-56", defaultLabLinks = ['ht
                     transaction: t
                 });
 
-            
                 const [lesson, created] = await Lesson.findOrCreate({
                     where: {
                         GroupId: group.id,
@@ -56,6 +69,7 @@ async function fillScheduleFromApi(groupName = "ІП-56", defaultLabLinks = ['ht
                         meetingLink: pair.meetingLink || null,
                         recordingLink: pair.recordingLink || null,
                         homework: pair.homework || null,
+                        audience: audVal || null,
                         GroupId: group.id,
                         SubjectId: subject.id,
                         day: dayName,
@@ -64,12 +78,15 @@ async function fillScheduleFromApi(groupName = "ІП-56", defaultLabLinks = ['ht
                     transaction: t
                 });
 
-            
                 if (!created) {
                     let changed = false;
                     if (pair.meetingLink && lesson.meetingLink !== pair.meetingLink) { lesson.meetingLink = pair.meetingLink; changed = true; }
                     if (pair.recordingLink && lesson.recordingLink !== pair.recordingLink) { lesson.recordingLink = pair.recordingLink; changed = true; }
                     if (pair.homework && lesson.homework !== pair.homework) { lesson.homework = pair.homework; changed = true; }
+                    if (audVal != null && lesson.audience !== audVal) {
+                        lesson.audience = audVal;
+                        changed = true;
+                    }
                     if (changed) await lesson.save({ transaction: t });
                 }
             }
