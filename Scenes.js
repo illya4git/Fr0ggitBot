@@ -1034,7 +1034,6 @@ const EditAudience = new Scenes.WizardScene(
       return ctx.scene.enter('SCHEDULE');
     }
 
-
     if (!/^\d+$/.test(text)) {
       await ctx.reply('Невірний формат аудиторії. Допускаються тільки цифри, наприклад: 401');
       return;
