@@ -783,8 +783,8 @@ const AddLesson = new Scenes.WizardScene(
     if (q.data === 'cancel') return ctx.scene.enter('SCHEDULE');
 
     let weekType = null;
-    if (q.data === 'week_first') weekType = 'first';
-    if (q.data === 'week_second') weekType = 'second';
+    if (q.data === 'week_first') weekType = 'second';
+    if (q.data === 'week_second') weekType = 'first';
     if (q.data === 'week_both') weekType = 'both';
 
     const nl = ctx.wizard.state.newLesson;
