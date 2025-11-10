@@ -656,6 +656,7 @@ const Schedule = new Scenes.WizardScene(
 const AddLesson = new Scenes.WizardScene(
   'ADD_LESSON',
 
+  // === КРОК 0: меню дій ===
   async (ctx) => {
     if (!ctx.session.isAdmin) return ctx.reply('У вас немає прав для управління парами.');
     await ctx.reply('Що ви хочете зробити?', Markup.inlineKeyboard([
@@ -666,6 +667,7 @@ const AddLesson = new Scenes.WizardScene(
     return ctx.wizard.next();
   },
 
+  // === КРОК 1: вибір дії ===
   async (ctx) => {
     if (!ctx.session.isAdmin) return ctx.scene.enter('SCHEDULE');
     const q = ctx.callbackQuery;
@@ -674,8 +676,14 @@ const AddLesson = new Scenes.WizardScene(
 
     if (q.data === 'cancel') return ctx.scene.enter('SCHEDULE');
 
+    // --- Видалення ---
     if (q.data === 'delete_existing') {
-      const lessons = await Lesson.findAll({ where: { GroupId: ctx.session.group?.id }, include: Subject, order: [['day','ASC'], ['timestamp','ASC']] });
+      if (!ctx.session.group?.id) return ctx.reply('Група не вибрана.');
+      const lessons = await Lesson.findAll({ 
+        where: { GroupId: ctx.session.group.id }, 
+        include: Subject, 
+        order: [['day','ASC'], ['timestamp','ASC']] 
+      });
       if (!lessons || lessons.length === 0) {
         await ctx.reply('У групі немає пар для видалення.');
         return ctx.scene.enter('SCHEDULE');
@@ -690,6 +698,7 @@ const AddLesson = new Scenes.WizardScene(
       return ctx.wizard.selectStep(8);
     }
 
+    // --- Додавання ---
     if (q.data === 'add_new') {
       await ctx.reply('Виберіть день:', Markup.inlineKeyboard([
         [ Markup.button.callback('Пн','day_Пн'), Markup.button.callback('Вт','day_Вт') ],
@@ -703,6 +712,7 @@ const AddLesson = new Scenes.WizardScene(
     return ctx.scene.enter('SCHEDULE');
   },
 
+  // === КРОК 2: вибір дня ===
   async (ctx) => {
     if (!ctx.session.isAdmin) return ctx.scene.enter('SCHEDULE');
     const q = ctx.callbackQuery;
@@ -713,18 +723,40 @@ const AddLesson = new Scenes.WizardScene(
 
     const day = q.data.replace('day_','');
     ctx.wizard.state.newLesson = { day };
-    await ctx.reply('Введіть час пари в форматі HH:MM (наприклад 08:30):');
+    await ctx.reply('Введіть час пари у форматі HH:MM (наприклад 08:30):');
     return ctx.wizard.next();
   },
 
+  // === КРОК 3: введення часу ===
   async (ctx) => {
     if (!ctx.session.isAdmin) return ctx.scene.enter('SCHEDULE');
     const time = ctx.message?.text;
     if (!time || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
-      await ctx.reply('Неправильний формат часу. Введіть в форматі HH:MM (наприклад 08:30).');
+      await ctx.reply('Неправильний формат часу. Введіть у форматі HH:MM (наприклад 08:30).');
       return;
     }
     ctx.wizard.state.newLesson.time = time;
+
+    // 🔸 Новий крок — вибір типу заняття
+    await ctx.reply('Виберіть тип заняття:', Markup.inlineKeyboard([
+      [ Markup.button.callback('📖 Лекція', 'type_lecture') ],
+      [ Markup.button.callback('🧩 Практика', 'type_practice') ],
+      [ Markup.button.callback('Скасувати', 'cancel') ]
+    ]));
+    return ctx.wizard.next();
+  },
+
+  // === КРОК 4: вибір типу заняття ===
+  async (ctx) => {
+    if (!ctx.session.isAdmin) return ctx.scene.enter('SCHEDULE');
+    const q = ctx.callbackQuery;
+    if (!q) return ctx.reply('Будь ласка, виберіть тип кнопкою.');
+    try { await ctx.telegram.answerCbQuery(q.id).catch(()=>{}); } catch {}
+    if (q.data === 'cancel') return ctx.scene.enter('SCHEDULE');
+
+    if (q.data === 'type_lecture') ctx.wizard.state.newLesson.isPractice = false;
+    else if (q.data === 'type_practice') ctx.wizard.state.newLesson.isPractice = true;
+    else return ctx.scene.enter('SCHEDULE');
 
     const subs = await Subject.findAll({ where: { GroupId: ctx.session.group.id } });
     const buttons = subs.map(s => [ Markup.button.callback(s.name, `sub_${s.id}`) ]);
@@ -735,6 +767,7 @@ const AddLesson = new Scenes.WizardScene(
     return ctx.wizard.next();
   },
 
+  // === КРОК 5: вибір або створення предмета ===
   async (ctx) => {
     if (!ctx.session.isAdmin) return ctx.scene.enter('SCHEDULE');
     const q = ctx.callbackQuery;
@@ -754,12 +787,13 @@ const AddLesson = new Scenes.WizardScene(
         [ Markup.button.callback('Обидва', 'week_both') ],
         [ Markup.button.callback('Скасувати','cancel') ]
       ]));
-      return ctx.wizard.selectStep(6);
+      return ctx.wizard.selectStep(7);
     }
 
     return ctx.scene.enter('SCHEDULE');
   },
 
+  // === КРОК 6: створення нового предмета ===
   async (ctx) => {
     if (!ctx.session.isAdmin) return ctx.scene.enter('SCHEDULE');
     const name = ctx.message?.text;
@@ -775,6 +809,7 @@ const AddLesson = new Scenes.WizardScene(
     return ctx.wizard.next();
   },
 
+  // === КРОК 7: вибір тижня та збереження ===
   async (ctx) => {
     if (!ctx.session.isAdmin) return ctx.scene.enter('SCHEDULE');
     const q = ctx.callbackQuery;
@@ -783,8 +818,8 @@ const AddLesson = new Scenes.WizardScene(
     if (q.data === 'cancel') return ctx.scene.enter('SCHEDULE');
 
     let weekType = null;
-    if (q.data === 'week_first') weekType = 'second';
-    if (q.data === 'week_second') weekType = 'first';
+    if (q.data === 'week_first') weekType = 'first';
+    if (q.data === 'week_second') weekType = 'second';
     if (q.data === 'week_both') weekType = 'both';
 
     const nl = ctx.wizard.state.newLesson;
@@ -795,7 +830,7 @@ const AddLesson = new Scenes.WizardScene(
 
     await Lesson.create({
       timestamp: nl.time,
-      isPractice: false,
+      isPractice: nl.isPractice ?? false,
       meetingLink: null,
       recordingLink: null,
       homework: null,
@@ -805,14 +840,11 @@ const AddLesson = new Scenes.WizardScene(
       weekType
     });
 
-    await ctx.reply(`Пара додана: ${nl.day} ${nl.time}`);
+    await ctx.reply(`✅ Пара додана: ${nl.day} ${nl.time} (${nl.isPractice ? 'практика' : 'лекція'})`);
     return ctx.scene.enter('SCHEDULE');
   },
 
-  async (ctx) => {
-    return ctx.scene.enter('SCHEDULE');
-  },
-
+  // === КРОК 8: вибір пари для видалення ===
   async (ctx) => {
     if (!ctx.session.isAdmin) return ctx.scene.enter('SCHEDULE');
     const q = ctx.callbackQuery;
@@ -820,7 +852,7 @@ const AddLesson = new Scenes.WizardScene(
     try { await ctx.telegram.answerCbQuery(q.id).catch(()=>{}); } catch {}
     const d = q.data;
     if (d === 'back_to_add_menu') {
-      return ctx.wizard.selectStep(0);
+      return ctx.wizard.selectStep(1);
     }
 
     if (d && d.startsWith('del_lesson_')) {
@@ -842,6 +874,7 @@ const AddLesson = new Scenes.WizardScene(
     return ctx.scene.enter('SCHEDULE');
   },
 
+  // === КРОК 9: підтвердження видалення ===
   async (ctx) => {
     if (!ctx.session.isAdmin) return ctx.scene.enter('SCHEDULE');
     const q = ctx.callbackQuery;
@@ -849,7 +882,7 @@ const AddLesson = new Scenes.WizardScene(
     try { await ctx.telegram.answerCbQuery(q.id).catch(()=>{}); } catch {}
     const d = q.data;
     if (d === 'back_to_add_menu') {
-      return ctx.wizard.selectStep(0);
+      return ctx.wizard.selectStep(1);
     }
     if (d && d.startsWith('confirm_del_')) {
       const id = Number(d.replace('confirm_del_',''));
@@ -859,7 +892,7 @@ const AddLesson = new Scenes.WizardScene(
         return ctx.scene.enter('SCHEDULE');
       }
       await lesson.destroy();
-      await ctx.reply('Пара видалена.');
+      await ctx.reply('🗑️ Пара видалена.');
       return ctx.scene.enter('SCHEDULE');
     }
     return ctx.scene.enter('SCHEDULE');
