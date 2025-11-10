@@ -964,22 +964,23 @@ const EditLink = new Scenes.WizardScene(
 
 const AddHomework = new Scenes.WizardScene(
   'ADD_HOMEWORK',
+
   async (ctx) => {
     if (!ctx.session.isAdmin) {
       await ctx.reply('У вас немає прав для зміни домашніх.');
-      ctx.session.pendingLinkLessonId = null;
+      ctx.session.pendingHomeworkLessonId = null;
       return ctx.scene.enter('SCHEDULE');
     }
-  },
-  async (ctx) => {
+
     const lessonId = ctx.session.pendingHomeworkLessonId;
-    
+
     if (!lessonId) {
       await ctx.reply('Помилка: не вказана пара для додавання домашнього завдання.');
       return ctx.scene.enter('SCHEDULE');
     }
+
     await ctx.reply('Введіть текст домашнього завдання для цієї пари. Відправте /cancel для скасування.');
-    return ctx.wizard.next();
+    return ctx.wizard.next(); 
   },
 
   async (ctx) => {
@@ -988,21 +989,26 @@ const AddHomework = new Scenes.WizardScene(
       await ctx.reply('Будь ласка, введіть текст домашнього завдання.');
       return;
     }
+
     if (text === '/cancel' || text.toLowerCase() === 'відміна') {
       ctx.session.pendingHomeworkLessonId = null;
       return ctx.scene.enter('SCHEDULE');
     }
+
     const id = ctx.session.pendingHomeworkLessonId;
     const lesson = await Lesson.findByPk(id);
+
     if (!lesson) {
       await ctx.reply('Пара не знайдена.');
       ctx.session.pendingHomeworkLessonId = null;
       return ctx.scene.enter('SCHEDULE');
     }
+
     lesson.homework = text;
     await lesson.save();
     ctx.session.pendingHomeworkLessonId = null;
-    await ctx.reply('Домашнє завдання додано.');
+
+    await ctx.reply('✅ Домашнє завдання додано.');
     return ctx.scene.enter('SCHEDULE');
   }
 );
