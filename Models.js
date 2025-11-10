@@ -2,7 +2,7 @@ import { Sequelize, DataTypes, Model } from 'sequelize';
 
 export const sequelize = new Sequelize({
   dialect: 'sqlite',
-  storage: './main.sqlite',
+  storage: './data/main.sqlite',
   define: { timestamps: false }
 });
 
