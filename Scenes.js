@@ -547,7 +547,7 @@ const Schedule = new Scenes.WizardScene(
       const link = lesson.meetingLink || null;
       const aud = lesson.audience || 'Немає';
 
-      const info = `Пара:\nПредмет: ${subj}\nЧас: ${time}\n${practice}\n\nДомашнє: ${hw}\nАудиторія: ${aud}\nПосилання: ${link ? link : 'Немає'}`;
+      const info = `Пара:\nПредмет: ${subj}\nЧас: ${time}\n${practice}\n\nДомашнє: ${hw}\n\n\nАудиторія: ${aud}\nПосилання: ${link ? link : 'Немає'}`;
 
       const adminRow = [];
       if (ctx.session.isAdmin) {
