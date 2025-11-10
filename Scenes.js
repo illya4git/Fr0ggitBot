@@ -543,7 +543,7 @@ const Schedule = new Scenes.WizardScene(
       const time = lesson.timestamp || '—';
       const week = lesson.weekType || '—';
       const practice = lesson.isPractice ? 'Практика' : 'Лекція';
-      const hw = lesson.homework || 'Нет';
+      const hw = lesson.homework || 'Немає';
       const link = lesson.meetingLink || null;
       const aud = lesson.audience || 'Немає';
 
