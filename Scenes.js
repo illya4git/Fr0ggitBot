@@ -56,7 +56,7 @@ const GroupSelector = new Scenes.WizardScene(
 
     await ctx.reply('Оберіть групу:', Markup.inlineKeyboard([
       ...groups.map(group => [ Markup.button.callback(group.name, `group_${group.id}`) ]),
-      [ Markup.button.callback('➕ Створити нову', 'new') ],
+      // [ Markup.button.callback('➕ Створити нову', 'new') ],
       [ Markup.button.callback('➡️ Приєднатися', 'join') ]
     ]));
     return ctx.wizard.next();
@@ -502,7 +502,7 @@ const Schedule = new Scenes.WizardScene(
     const keyboard = [
       ...lessonButtons,
       ...ctx.session.isAdmin ? [ [ Markup.button.callback('➕ Змінити пари', 'new') ] ] : [],
-      [ Markup.button.callback('📋 Черга на лабу', 'lab_queue') ],
+      [ Markup.button.callback('📋 Черги', 'lab_queue') ],
       [ Markup.button.callback('⚙️ Налаштування', 'settings') ],
       [ Markup.button.callback('<<<', 'prev'), Markup.button.callback(dayLabel, 'date'), Markup.button.callback('>>>', 'next') ]
     ];
@@ -1067,7 +1067,7 @@ const EditAudience = new Scenes.WizardScene(
       return ctx.scene.enter('SCHEDULE');
     }
 
-    if (!/^\d+$/.test(text)) {
+    if (!/^\d+\w?$/.test(text)) {
       await ctx.reply('Невірний формат аудиторії. Допускаються тільки цифри, наприклад: 401');
       return;
     }
