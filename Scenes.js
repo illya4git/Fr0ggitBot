@@ -56,7 +56,7 @@ const GroupSelector = new Scenes.WizardScene(
 
     await ctx.reply('Оберіть групу:', Markup.inlineKeyboard([
       ...groups.map(group => [ Markup.button.callback(group.name, `group_${group.id}`) ]),
-      [ Markup.button.callback('➕ Створити нову', 'new') ],
+      // [ Markup.button.callback('➕ Створити нову', 'new') ],
       [ Markup.button.callback('➡️ Приєднатися', 'join') ]
     ]));
     return ctx.wizard.next();
