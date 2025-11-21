@@ -16,7 +16,8 @@ Group.init({
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   name: { type: DataTypes.STRING },
   inviteCode: { type: DataTypes.STRING, unique: true },
-  labLinks: { type: DataTypes.TEXT, allowNull: true }
+  labLinks: { type: DataTypes.TEXT, allowNull: true },
+  deadlineList: { type: DataTypes.TEXT, allowNull: true } 
 }, { sequelize, modelName: 'Group' });
 
 
