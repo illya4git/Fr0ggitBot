@@ -56,7 +56,7 @@ const GroupSelector = new Scenes.WizardScene(
 
     await ctx.reply('Оберіть групу:', Markup.inlineKeyboard([
       ...groups.map(group => [ Markup.button.callback(group.name, `group_${group.id}`) ]),
-      // [ Markup.button.callback('➕ Створити нову', 'new') ],
+      [ Markup.button.callback('➕ Створити нову', 'new') ],
       [ Markup.button.callback('➡️ Приєднатися', 'join') ]
     ]));
     return ctx.wizard.next();
@@ -502,6 +502,7 @@ const Schedule = new Scenes.WizardScene(
     const keyboard = [
       ...lessonButtons,
       ...ctx.session.isAdmin ? [ [ Markup.button.callback('➕ Змінити пари', 'new') ] ] : [],
+      [ Markup.button.callback('🗓️ Дедлайни', 'deadlines') ],
       [ Markup.button.callback('📋 Черги', 'lab_queue') ],
       [ Markup.button.callback('⚙️ Налаштування', 'settings') ],
       [ Markup.button.callback('<<<', 'prev'), Markup.button.callback(dayLabel, 'date'), Markup.button.callback('>>>', 'next') ]
@@ -628,6 +629,10 @@ const Schedule = new Scenes.WizardScene(
       return ctx.scene.enter('LAB_QUEUE');
     }
 
+    if (d === 'deadlines') {
+      return ctx.scene.enter('DEADLINES');
+    }
+
     if (d && d.startsWith('addhw_')) {
       const id = Number(d.replace('addhw_',''));
       ctx.session.pendingHomeworkLessonId = id;
@@ -648,6 +653,164 @@ const Schedule = new Scenes.WizardScene(
     }
 
     return;
+  }
+);
+
+
+const Deadlines = new Scenes.WizardScene(
+  'DEADLINES',
+  async (ctx) => {
+    const gid = ctx.session.group?.id || ctx.session.groupId;
+    if (!gid) { await ctx.reply('Група не обрана.'); return ctx.scene.enter('GROUP_SELECTOR'); }
+    const group = await Group.findByPk(gid);
+    if (!group) { await ctx.reply('Група не знайдена.'); return ctx.scene.enter('GROUP_SELECTOR'); }
+
+    let list = [];
+    try { list = group.deadlineList ? JSON.parse(group.deadlineList) : []; } catch (e) { list = []; }
+
+    const rows = [];
+    if (!list.length) rows.push([ Markup.button.callback('Немає дедлайнів', 'noop') ]);
+    else {
+      for (const dl of list) {
+        const id = dl.id;
+        const label = `${dl.due || '—'} — ${dl.title || 'Без назви'}`;
+        const row = [ Markup.button.callback(label, `dl_view_${id}`) ];
+        if (ctx.session.isAdmin) row.push(Markup.button.callback('❌', `dl_del_${id}`));
+        rows.push(row);
+      }
+    }
+
+    if (ctx.session.isAdmin) rows.push([ Markup.button.callback('➕ Додати дедлайн', 'dl_add') ]);
+    rows.push([ Markup.button.callback('⬅️ Назад', 'back_to_schedule') ]);
+
+    await ctx.reply(`📌 Дедлайни — ${group.name}`, Markup.inlineKeyboard(rows));
+    return ctx.wizard.next();
+  },
+
+  async (ctx) => {
+    const q = ctx.callbackQuery;
+    if (!q) return;
+    try { await ctx.telegram.answerCbQuery(q.id).catch(()=>{}); } catch {}
+    const d = q.data;
+    const gid = ctx.session.group?.id || ctx.session.groupId;
+    const group = await Group.findByPk(gid);
+    if (!group) return ctx.scene.enter('GROUP_SELECTOR');
+
+    if (d === 'back_to_schedule') return ctx.scene.enter('SCHEDULE');
+    if (d === 'dl_add') {
+      if (!ctx.session.isAdmin) { await ctx.reply('У вас немає прав.'); return ctx.scene.enter('DEADLINES'); }
+      ctx.session.pendingDeadline = { id: Date.now() };
+      await ctx.reply('Надішліть заголовок дедлайну:');
+      return ctx.wizard.selectStep(2);
+    }
+     if (d && d.startsWith('dl_view_')) {
+      const id = Number(d.replace('dl_view_',''));
+      let list = []; try { list = group.deadlineList ? JSON.parse(group.deadlineList) : []; } catch (e) { list = []; }
+      const item = list.find(x => Number(x.id) === id);
+      if (!item) { await ctx.reply('Не знайдено.'); return ctx.scene.enter('DEADLINES'); }
+      const text = `📌 ${item.title}\nТермін: ${item.due || '—'}\n\n${item.note || ''}`;
+      const kb = [];
+      if (ctx.session.isAdmin) kb.push([ Markup.button.callback('✏️ Редагувати', `dl_edit_${id}`), Markup.button.callback('❌ Видалити', `dl_del_${id}`) ]);
+      kb.push([ Markup.button.callback('⬅️ Назад', 'back_to_deadlines') ]);
+
+      console.log('dl_view callback:', { user: ctx.from?.id, id, messageId: ctx.callbackQuery?.message?.message_id });
+
+      await ctx.reply(text, Markup.inlineKeyboard(kb));
+      return;
+    }
+    if (d && d.startsWith('dl_del_')) {
+      if (!ctx.session.isAdmin) { await ctx.reply('У вас немає прав.'); return ctx.scene.enter('DEADLINES'); }
+      const id = Number(d.replace('dl_del_',''));
+      let list = []; try { list = group.deadlineList ? JSON.parse(group.deadlineList) : []; } catch (e) { list = []; }
+      const idx = list.findIndex(x => Number(x.id) === id);
+      if (idx === -1) { await ctx.reply('Не знайдено.'); return ctx.scene.enter('DEADLINES'); }
+      list.splice(idx,1);
+      group.deadlineList = JSON.stringify(list);
+      await group.save();
+      await ctx.reply('Дедлайн видалено.');
+      return ctx.scene.enter('DEADLINES');
+    }
+    if (d && d.startsWith('dl_edit_')) {
+      if (!ctx.session.isAdmin) { await ctx.reply('У вас немає прав.'); return ctx.scene.enter('DEADLINES'); }
+      const id = Number(d.replace('dl_edit_',''));
+      ctx.session.editDeadlineId = id;
+      ctx.session.pendingDeadline = null;
+      await ctx.reply('Надішліть новий заголовок або /skip:');
+      return ctx.wizard.selectStep(2);
+    }
+
+    if (d === 'back_to_deadlines') return ctx.scene.enter('DEADLINES');
+    return ctx.scene.enter('DEADLINES');
+  },
+
+  async (ctx) => {
+    const text = ctx.message?.text;
+    if (!text) return ctx.reply('Надішліть текст заголовка.');
+    if (text === '/cancel') { ctx.session.pendingDeadline = null; ctx.session.editDeadlineId = null; return ctx.scene.enter('DEADLINES'); }
+
+    ctx.session.pendingDeadline = ctx.session.pendingDeadline || {};
+    if (!(ctx.session.editDeadlineId)) ctx.session.pendingDeadline.title = text.trim().slice(0,300);
+    else if (text !== '/skip') ctx.session.pendingDeadline.title = text.trim().slice(0,300);
+
+    await ctx.reply('Надішліть термін YYYY-MM-DD або /skip:');
+    return ctx.wizard.next();
+  },
+
+  async (ctx) => {
+    const text = ctx.message?.text;
+    if (!text) return ctx.reply('Надішліть дату або /skip.');
+    if (text === '/cancel') { ctx.session.pendingDeadline = null; ctx.session.editDeadlineId = null; return ctx.scene.enter('DEADLINES'); }
+
+    if (text !== '/skip' && !/^\d{4}-\d{2}-\d{2}$/.test(text.trim())) {
+      await ctx.reply('Невірний формат. Використовуйте YYYY-MM-DD або /skip.');
+      return;
+    }
+    if (text !== '/skip') ctx.session.pendingDeadline.due = text.trim();
+
+    await ctx.reply('Надішліть примітку або /skip:');
+    return ctx.wizard.next();
+  },
+
+  async (ctx) => {
+    const text = (ctx.message?.text || '').trim();
+    if (text === '/cancel') { ctx.session.pendingDeadline = null; ctx.session.editDeadlineId = null; return ctx.scene.enter('DEADLINES'); }
+
+    const note = (text === '/skip' || !text) ? '' : text.slice(0,1000);
+    const gid = ctx.session.group?.id || ctx.session.groupId;
+    const group = await Group.findByPk(gid);
+    if (!group) { ctx.session.pendingDeadline = null; ctx.session.editDeadlineId = null; return ctx.scene.enter('GROUP_SELECTOR'); }
+
+    let list = [];
+    try { list = group.deadlineList ? JSON.parse(group.deadlineList) : []; } catch (e) { list = []; }
+
+    if (ctx.session.editDeadlineId) {
+      const id = ctx.session.editDeadlineId;
+      const idx = list.findIndex(x => Number(x.id) === Number(id));
+      if (idx === -1) { await ctx.reply('Не знайдено.'); ctx.session.pendingDeadline = null; ctx.session.editDeadlineId = null; return ctx.scene.enter('DEADLINES'); }
+      const item = list[idx];
+      if (ctx.session.pendingDeadline?.title) item.title = ctx.session.pendingDeadline.title;
+      if (ctx.session.pendingDeadline?.due) item.due = ctx.session.pendingDeadline.due;
+      if (note) item.note = note;
+      list[idx] = item;
+      group.deadlineList = JSON.stringify(list);
+      await group.save();
+      ctx.session.pendingDeadline = null; ctx.session.editDeadlineId = null;
+      await ctx.reply('Дедлайн оновлено.');
+      return ctx.scene.enter('DEADLINES');
+    }
+
+    const newItem = {
+      id: ctx.session.pendingDeadline?.id || Date.now(),
+      title: ctx.session.pendingDeadline?.title || 'Без назви',
+      due: ctx.session.pendingDeadline?.due || null,
+      note: note || ''
+    };
+    list.push(newItem);
+    group.deadlineList = JSON.stringify(list);
+    await group.save();
+    ctx.session.pendingDeadline = null;
+    await ctx.reply('Дедлайн додано.');
+    return ctx.scene.enter('DEADLINES');
   }
 );
 
@@ -1082,4 +1245,4 @@ const EditAudience = new Scenes.WizardScene(
 );
 
 
-export default new Scenes.Stage([ GroupSelector, GroupSettings, Schedule, AddLesson, AddHomework, LabQueue, EditLink, EditAudience ]);
+export default new Scenes.Stage([ GroupSelector, GroupSettings, Schedule, Deadlines, AddLesson, AddHomework, LabQueue, EditLink, EditAudience ]);
