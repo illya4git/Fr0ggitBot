@@ -665,8 +665,21 @@ const Deadlines = new Scenes.WizardScene(
     const group = await Group.findByPk(gid);
     if (!group) { await ctx.reply('Група не знайдена.'); return ctx.scene.enter('GROUP_SELECTOR'); }
 
-    let list = [];
+     let list = [];
     try { list = group.deadlineList ? JSON.parse(group.deadlineList) : []; } catch (e) { list = []; }
+
+
+    list.sort((a, b) => {
+      const firstDate = a?.due ? new Date(a.due) : null;
+      const secondDate = b?.due ? new Date(b.due) : null;
+      const aInvalid = !firstDate || isNaN(firstDate);
+      const bInvalid = !secondDate || isNaN(secondDate);
+      if (aInvalid && bInvalid) return 0;
+      if (aInvalid) return 1;
+      if (bInvalid) return -1;
+      return firstDate - secondDate;
+    });
+
 
     const rows = [];
     if (!list.length) rows.push([ Markup.button.callback('Немає дедлайнів', 'noop') ]);
