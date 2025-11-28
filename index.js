@@ -1,13 +1,11 @@
-import { Telegraf } from 'telegraf';
-import LocalSession from 'telegraf-session-local';
+import { Telegraf, session } from 'telegraf';
 import { User, UserGroup, Group } from './Models.js'; 
 import stage from './Scenes.js';
 import 'dotenv/config';
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-const session = new LocalSession({ database: './data/sessions.json' });
-bot.use(session.middleware());
+bot.use(session());
 bot.use(stage.middleware());
 
 bot.use(async (ctx, next) => {
